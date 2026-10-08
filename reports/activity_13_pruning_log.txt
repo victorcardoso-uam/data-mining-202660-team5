@@ -1,0 +1,18 @@
+==============================================================================
+ACTIVITY 13 — COST-COMPLEXITY PRUNING | TEAM 5 SMART GRID
+==============================================================================
+Dataset: pruning_team5_smartgrid.csv | rows=680 | features=4
+Features: transformer_load_pct, oil_temp_c, vibration_mm_s, harmonic_distortion_pct
+Target: grid_disturbance_flag
+Train size: 510 | Test size: 170
+Class balance (train): {0: 0.731, 1: 0.269}
+
+Total cost: R_alpha(T) = R_test(T) + alpha * |T|
+
+               candidate ccp_alpha  leaves  max_depth train_error test_error total_cost
+ alpha_1 (Unconstrained)     0.001      71         13       0.00%     14.12%     0.2122
+alpha_2 (Optimal Pruned)     0.015       7          4       8.63%      6.47%     0.1697
+   alpha_3 (Over-Pruned)     0.080       1          0      26.86%     27.06%     0.3506
+
+Optimal alpha*: 0.015 -> alpha_2 (Optimal Pruned) (test error 6.47%, total cost 0.1697)
+==============================================================================
