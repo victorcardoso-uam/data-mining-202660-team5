@@ -1,0 +1,153 @@
+{
+  "champion": "Random Forest",
+  "champion_params": {
+    "max_depth": 8,
+    "min_samples_leaf": 5
+  },
+  "cv_auc": {
+    "Decision Tree": 0.6535,
+    "Random Forest": 0.762,
+    "Logistic Regression": 0.7487
+  },
+  "threshold": 0.41,
+  "train": {
+    "threshold": 0.41,
+    "f1": 0.7423076923076923,
+    "recall": 0.9554455445544554,
+    "precision": 0.6069182389937107,
+    "roc_auc": 0.948646316913849,
+    "pr_auc": 0.8941430201134927,
+    "confusion": [
+      [
+        357,
+        125
+      ],
+      [
+        9,
+        193
+      ]
+    ]
+  },
+  "test_default": {
+    "threshold": 0.5,
+    "f1": 0.5935483870967742,
+    "recall": 0.6865671641791045,
+    "precision": 0.5227272727272727,
+    "roc_auc": 0.7683439091965323,
+    "pr_auc": 0.5436706670551301,
+    "confusion": [
+      [
+        125,
+        42
+      ],
+      [
+        21,
+        46
+      ]
+    ]
+  },
+  "test_policy": {
+    "threshold": 0.41,
+    "f1": 0.5472636815920398,
+    "recall": 0.8208955223880597,
+    "precision": 0.41044776119402987,
+    "roc_auc": 0.7683439091965323,
+    "pr_auc": 0.5436706670551301,
+    "confusion": [
+      [
+        88,
+        79
+      ],
+      [
+        12,
+        55
+      ]
+    ]
+  },
+  "folds_mean": {
+    "roc_auc": 0.7856,
+    "f1": 0.5703,
+    "recall": 0.8177,
+    "precision": 0.4382
+  },
+  "folds_std": {
+    "roc_auc": 0.021,
+    "f1": 0.032,
+    "recall": 0.0362,
+    "precision": 0.0302
+  },
+  "leaky_random_split": {
+    "threshold": 0.4,
+    "f1": 0.6496815286624203,
+    "recall": 0.7611940298507462,
+    "precision": 0.5666666666666667,
+    "roc_auc": 0.8773463968501053,
+    "pr_auc": 0.7708043378612407,
+    "confusion": [
+      [
+        124,
+        39
+      ],
+      [
+        16,
+        51
+      ]
+    ]
+  },
+  "risk_bands": [
+    {
+      "band": "Low (< 0.41)",
+      "units": 415,
+      "slow_rate": 0.1180722891566265,
+      "capital_mxn": 2664823.5,
+      "stalled_capital_mxn": 313595.91
+    },
+    {
+      "band": "Watch (0.41-0.60)",
+      "units": 304,
+      "slow_rate": 0.3223684210526316,
+      "capital_mxn": 2490247.58,
+      "stalled_capital_mxn": 746960.88
+    },
+    {
+      "band": "High (>= 0.60)",
+      "units": 199,
+      "slow_rate": 0.6130653266331658,
+      "capital_mxn": 2052272.8,
+      "stalled_capital_mxn": 1331938.22
+    }
+  ],
+  "stalled_capital_mxn": 2392495.0100000002,
+  "flagged_stalled_mxn": 2078899.1,
+  "silhouette": {
+    "2": 0.1841,
+    "3": 0.1676,
+    "4": 0.143,
+    "5": 0.1195,
+    "6": 0.1182,
+    "7": 0.1294,
+    "8": 0.124
+  },
+  "importance": {
+    "mean": {
+      "warehouse": 0.1207,
+      "brand": 0.0808,
+      "landed_cost_mxn": 0.0514,
+      "page_counter_k": 0.039,
+      "acc_fax": 0.0294,
+      "line": 0.0288,
+      "acc_dsdf": 0.016,
+      "acc_radf": 0.0142
+    },
+    "std": {
+      "warehouse": 0.0198,
+      "brand": 0.0149,
+      "landed_cost_mxn": 0.0054,
+      "page_counter_k": 0.0067,
+      "acc_fax": 0.0096,
+      "line": 0.0048,
+      "acc_dsdf": 0.0037,
+      "acc_radf": 0.0034
+    }
+  }
+}
