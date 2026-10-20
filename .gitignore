@@ -1,0 +1,6 @@
+.DS_Store
+__pycache__/
+.venv/
+.vscode/
+# Confidential Big99 export: never commit the raw file (client names, invoices, customs IDs)
+data/raw/inventario_mfp_usado.csv

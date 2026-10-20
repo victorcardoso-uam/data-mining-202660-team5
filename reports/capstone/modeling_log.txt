@@ -1,0 +1,95 @@
+==============================================================================
+BIG99 CAPSTONE — SLOW-MOVER CLASSIFIER (MILESTONE 2)
+==============================================================================
+Rows 918 | features 14 | lots 99 | positives 29.3%
+
+------------------------------------------------------------------------------
+1. LOT-GROUPED HOLD-OUT SPLIT (~75/25)
+------------------------------------------------------------------------------
+Train 684 units / 75 lots | Test 234 units / 24 lots | lots in both: 0
+Positive rate: train 29.5% | test 28.6%
+
+------------------------------------------------------------------------------
+2. MODEL SELECTION (5-fold grouped CV on train, scoring = ROC-AUC)
+------------------------------------------------------------------------------
+  Decision Tree        CV ROC-AUC 0.654  {'max_depth': 5, 'min_samples_leaf': 20}
+  Random Forest        CV ROC-AUC 0.762  {'max_depth': 8, 'min_samples_leaf': 5}
+  Logistic Regression  CV ROC-AUC 0.749  {'C': 0.3}
+Champion: Random Forest
+
+------------------------------------------------------------------------------
+3. DECISION THRESHOLD (out-of-fold on train only)
+------------------------------------------------------------------------------
+Threshold 0.41: OOF recall 0.832, OOF F1 0.588 (highest F1 with recall >= 0.75)
+
+------------------------------------------------------------------------------
+4. HOLD-OUT TEST RESULTS
+------------------------------------------------------------------------------
+                                F1   Recall   Prec.  ROC-AUC  PR-AUC
+Train (policy threshold)     0.742    0.955   0.607    0.949   0.894
+Test @ 0.50                  0.594    0.687   0.523    0.768   0.544
+Test @ 0.41 (policy)         0.547    0.821   0.410    0.768   0.544
+Confusion (policy): TN 88 | FP 79 | FN 12 | TP 55
+Milestone 1 targets: recall >= 0.75 -> MET (0.82); F1 >= 0.7 -> MISSED (0.55)
+
+------------------------------------------------------------------------------
+5. ROBUSTNESS: 4-fold grouped CV over all lots (champion settings)
+------------------------------------------------------------------------------
+      roc_auc     f1  recall  precision
+mean    0.786  0.570   0.818      0.438
+std     0.021  0.032   0.036      0.030
+
+------------------------------------------------------------------------------
+6. LEAKAGE CHECK: random row split vs lot-grouped split
+------------------------------------------------------------------------------
+Random split : ROC-AUC 0.877 | F1 0.650 | recall 0.761  <- inflated: same-lot twins on both sides
+Lot-grouped  : ROC-AUC 0.786 | F1 0.570 | recall 0.818  <- reported number
+
+------------------------------------------------------------------------------
+7. FEATURE IMPORTANCE (permutation on hold-out, grouped by input)
+------------------------------------------------------------------------------
+                   mean     std
+warehouse        0.1207  0.0198
+brand            0.0808  0.0149
+landed_cost_mxn  0.0514  0.0054
+page_counter_k   0.0390  0.0067
+acc_fax          0.0294  0.0096
+line             0.0288  0.0048
+acc_dsdf         0.0160  0.0037
+acc_radf         0.0142  0.0034
+
+------------------------------------------------------------------------------
+8. RISK BANDS FOR THE OPERATING POLICY (out-of-fold, all units)
+------------------------------------------------------------------------------
+                   units  slow_rate  capital_mxn  stalled_capital_mxn
+band                                                                 
+Low (< 0.41)         415      0.118   2664823.50            313595.91
+Watch (0.41-0.60)    304      0.322   2490247.58            746960.88
+High (>= 0.60)       199      0.613   2052272.80           1331938.22
+Stalled capital in stock: MXN 2,392,495
+Flagged by the policy threshold: MXN 2,078,899 (86.9% of stalled capital)
+
+------------------------------------------------------------------------------
+9. K-MEANS ON THE EXTENDED FEATURE SPACE
+------------------------------------------------------------------------------
+2    0.1841
+3    0.1676
+4    0.1430
+5    0.1195
+6    0.1182
+7    0.1294
+8    0.1240
+Peak silhouette 0.184 at K = 2 (baseline 0.305, target 0.4) -> MISSED
+
+------------------------------------------------------------------------------
+10. FIGURES
+------------------------------------------------------------------------------
+Figure -> reports/capstone/confusion_matrix.png
+Figure -> reports/capstone/roc_pr_curves.png
+Figure -> reports/capstone/leakage_check.png
+Figure -> reports/capstone/feature_importance.png
+Figure -> reports/capstone/risk_bands.png
+Figure -> reports/capstone/kmeans_silhouette.png
+
+Metrics -> reports/capstone/metrics.json
+==============================================================================
