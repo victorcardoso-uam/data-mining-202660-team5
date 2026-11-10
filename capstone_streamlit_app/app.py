@@ -1,272 +1,403 @@
-import streamlit as st
-import pandas as pd
+"""
+IIND4417 — Capstone Milestone 3, Team 5
+Big99 Inventory Intelligence: slow-mover decision dashboard.
+
+Loads pre-trained artifacts from models/*.joblib (see train_models.py); nothing
+is trained when the app starts.
+
+From capstone_streamlit_app/:
+    streamlit run app.py
+"""
+import json
+from pathlib import Path
+
+import joblib
 import numpy as np
+import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix, roc_curve
+import sklearn
+import streamlit as st
 
-# =============================================================================
-# 1. PAGE CONFIGURATION & STYLING
-# =============================================================================
-st.set_page_config(
-    page_title="Session 24: Enterprise AI Decision Engine",
-    page_icon="⚡",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+APP = Path(__file__).resolve().parent
+MODELS = APP / "models"
+TARGET = "slow_mover_flag"
+AGE = "days_in_stock"
+SLOW_DAYS = 120
+DISCOUNT = 0.25
+GREEN, RED, AMBER, BLUE, VIOLET = "#10B981", "#EF4444", "#E08A3C", "#8FA3D9", "#C084FC"
+STATUS = {0: "Healthy turnover", 1: "Slow mover (> 120 days)"}
+STATUS_COLORS = {STATUS[0]: GREEN, STATUS[1]: RED}
+MODEL_COLORS = {"Random Forest": AMBER, "Decision Tree": BLUE, "MLR": GREEN, "ANN": VIOLET}
+FAMILY = {"Random Forest": "Classical ensemble", "Decision Tree": "Classical tree",
+          "MLR": "Classical regression", "ANN": "Neural network"}
+LABELS = {"page_counter_k": "Page counter (thousands)", "landed_cost_mxn": "Landed cost (MXN)",
+          AGE: "Days in stock", "brand": "Brand", "line": "Product line",
+          "warehouse": "Warehouse", "appearance": "Appearance", "copy_quality": "Copy quality"}
 
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.2rem;
-        font-weight: 700;
-        color: #F8F9FA;
-        margin-bottom: 0.2rem;
-    }
-    .sub-header {
-        font-size: 1.05rem;
-        color: #ADB5BD;
-        margin-bottom: 1.5rem;
-    }
-    .metric-card {
-        background-color: #1E2125;
-        border-radius: 8px;
-        padding: 15px;
-        border: 1px solid #343A40;
-    }
-</style>
-""", unsafe_allow_html=True)
+st.set_page_config(page_title="Big99 Inventory Intelligence", page_icon="📦", layout="wide",
+                   initial_sidebar_state="expanded")
 
 
-# =============================================================================
-# 2. CACHED DATASETS & MODEL TRAINING
-# =============================================================================
 @st.cache_data
 def load_data():
-    """Loads unified enterprise demonstration dataset."""
-    try:
-        df = pd.read_csv("session24_unified_enterprise_demo.csv")
-    except FileNotFoundError:
-        df = pd.read_csv("data/session24_unified_enterprise_demo.csv")
-    return df
+    return pd.read_csv(APP / "data" / "team_dataset.csv")
+
+
+@st.cache_data
+def load_metrics():
+    return json.loads((MODELS / "metrics.json").read_text())
+
 
 @st.cache_resource
-def train_models(df):
-    """Trains baseline classification models on preprocessed features."""
-    X = df[['operating_temperature_c', 'vibration_amplitude_mm', 'power_consumption_kw', 'pressure_psi', 'operating_hours']]
-    y = df['system_failure_flag']
-    
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, random_state=42, stratify=y)
-    
-    models = {
-        "Random Forest (Ensemble)": RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42),
-        "Decision Tree (CART)": DecisionTreeClassifier(max_depth=4, random_state=42),
-        "Logistic Regression": LogisticRegression(random_state=42)
-    }
-    
-    fitted_models = {}
-    performance = []
-    
-    for name, model in models.items():
-        model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
-        y_prob = model.predict_proba(X_test)[:, 1] if hasattr(model, "predict_proba") else y_pred
-        
-        fitted_models[name] = model
-        performance.append({
-            "Model Algorithm": name,
-            "Accuracy": round(accuracy_score(y_test, y_pred), 3),
-            "Precision": round(precision_score(y_test, y_pred, zero_division=0), 3),
-            "Recall": round(recall_score(y_test, y_pred, zero_division=0), 3),
-            "F1-Score": round(f1_score(y_test, y_pred, zero_division=0), 3),
-            "ROC-AUC": round(roc_auc_score(y_test, y_prob), 3)
-        })
-        
-    return fitted_models, pd.DataFrame(performance), X_test, y_test
-
-# Load data and train models
-df_raw = load_data()
-fitted_models, performance_df, X_test, y_test = train_models(df_raw)
+def load_artifacts(files):
+    """Deserialize the fitted preprocessor, scaler and every model once per server."""
+    models = {name: joblib.load(MODELS / file) for name, file in files.items()}
+    return joblib.load(MODELS / "preprocessor.joblib"), joblib.load(MODELS / "standard_scaler.joblib"), models
 
 
-# =============================================================================
-# 3. SIDEBAR CONTROLS & NAVIGATION
-# =============================================================================
-st.sidebar.image("https://img.icons8.com/color/96/000000/data-configuration.png", width=64)
-st.sidebar.title("Enterprise AI Suite")
-st.sidebar.caption("Data Mining & Modern AI Systems (IIND4417)")
+def raw_score(name, row):
+    """Stall probability, or predicted log1p(days) for the regression model."""
+    Z = preprocessor.transform(row)
+    if policy[name]["kind"] == "regression":
+        return float(models[name].predict(Z)[0])
+    return float(models[name].predict_proba(Z)[0, 1])
 
+
+def risk_band(name, score):
+    if score >= policy[name]["high"]:
+        return "HIGH"
+    return "WATCH" if score >= policy[name]["watch"] else "LOW"
+
+
+df = load_data()
+meta = load_metrics()
+preprocessor, scaler, models = load_artifacts(meta["files"])
+policy, results = meta["policy"], meta["results"]
+model_names = sorted(results, key=lambda n: -results[n]["cv_auc_mean"])
+
+# ------------------------------------------------------------------------------
+# Session state: what-if inputs survive tab switches and script reruns
+# ------------------------------------------------------------------------------
+DEFAULTS = {
+    "wi_days": 60,
+    "wi_cost": int(round(df["landed_cost_mxn"].median(), -2)),
+    "wi_counter": int(df["page_counter_k"].median()),
+    "wi_brand": df["brand"].mode()[0],
+    "wi_line": df["line"].mode()[0],
+    "wi_warehouse": df["warehouse"].mode()[0],
+    "wi_appearance": df["appearance"].mode()[0],
+    "wi_quality": df["copy_quality"].mode()[0],
+    "wi_working": "SI",
+    "wi_acc": ["acc_duplex", "acc_dsdf"],
+}
+for key, value in DEFAULTS.items():
+    st.session_state.setdefault(key, value)
+st.session_state.setdefault("history", [])
+st.session_state.setdefault("active_model", meta["champion"])
+
+
+def reset_scenario():
+    for key, value in DEFAULTS.items():
+        st.session_state[key] = value
+
+
+def load_preset(which):
+    row = meta["presets"][which]
+    counter = row["page_counter_k"]
+    st.session_state.update({
+        "wi_days": int(min(row[AGE], 730)),
+        "wi_cost": int(min(round(row["landed_cost_mxn"], -2), 45000)),
+        "wi_counter": DEFAULTS["wi_counter"] if pd.isna(counter) else int(min(counter, 1700)),
+        "wi_brand": row["brand"], "wi_line": row["line"], "wi_warehouse": row["warehouse"],
+        "wi_appearance": row["appearance"], "wi_quality": row["copy_quality"], "wi_working": row["working"],
+        "wi_acc": [c for c in meta["accessories"] if row[c] == 1],
+    })
+
+
+# ------------------------------------------------------------------------------
+# Sidebar
+# ------------------------------------------------------------------------------
+st.sidebar.title("📦 Big99 Inventory Intelligence")
+st.sidebar.caption("IIND4417 · Capstone Milestone 3 · Team 5")
 st.sidebar.divider()
-st.sidebar.subheader("🎛️ Global Inference Settings")
-selected_model_name = st.sidebar.selectbox("Select Active Model:", list(fitted_models.keys()))
-model_threshold = st.sidebar.slider("Risk Decision Cutoff (Threshold)", 0.05, 0.95, 0.50, 0.05)
-
+st.sidebar.selectbox("Active model", model_names, key="active_model",
+                     format_func=lambda n: f"{n} ★ champion" if n == meta["champion"] else n)
+active = st.session_state["active_model"]
+rule = policy[active]
+if rule["kind"] == "regression":
+    st.sidebar.caption(f"Flags a unit when predicted days in stock ≥ {rule['watch_days']:.0f}.")
+else:
+    st.sidebar.caption(f"WATCH from {rule['watch']:.2f} · HIGH from {rule['high']:.2f} stall probability. "
+                       "Cut-offs were tuned on out-of-fold training lots.")
 st.sidebar.divider()
-st.sidebar.info("📌 Master Blueprint Notice: Use this unified dashboard in Session 24 as your template. Adapt this architecture for your Capstone Project in Milestone 3/3 (Session 27 / Session 28 — Thursday, November 12, 2026)!")
+st.sidebar.markdown("**Serialized artifacts loaded**")
+st.sidebar.code("\n".join(["preprocessor.joblib", "standard_scaler.joblib", *meta["files"].values()]), language=None)
+if meta["sklearn_version"] != sklearn.__version__:
+    st.sidebar.warning(f"Models were trained with scikit-learn {meta['sklearn_version']}; "
+                       f"this server runs {sklearn.__version__}. Run: pip install -r requirements.txt")
 
+# ------------------------------------------------------------------------------
+# Header and KPI cards
+# ------------------------------------------------------------------------------
+st.title("Big99 Inventory Intelligence")
+st.caption("Procurement & Commercial Director · Used-MFP slow-mover early warning across MID, MEX, GDL and MTY")
 
-# =============================================================================
-# 4. MAIN EXECUTIVE DASHBOARD HEADER
-# =============================================================================
-st.markdown('<div class="main-header">⚡ Session 24: Unified Enterprise AI Decision Engine</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Industrial Telemetry & Risk Prediction | Master Blueprint for Capstone Milestone 3/3</div>', unsafe_allow_html=True)
-
-# Top Metric Cards
+total_capital = df["landed_cost_mxn"].sum()
+stalled = df.loc[df[TARGET] == 1, "landed_cost_mxn"].sum()
 kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-with kpi1:
-    st.metric("Total Ingested Telemetry Records", f"{len(df_raw):,}", delta="100% Ingested")
-with kpi2:
-    st.metric("Feature Dimensions", f"{df_raw.shape[1] - 1} Features", delta="Engineered")
-with kpi3:
-    failure_rate = (df_raw['system_failure_flag'].mean()) * 100
-    st.metric("System Failure Rate", f"{failure_rate:.1f}%", delta="Target: system_failure_flag")
-with kpi4:
-    best_auc = performance_df[performance_df['Model Algorithm'] == selected_model_name]['ROC-AUC'].values[0]
-    st.metric("Active Model ROC-AUC", f"{best_auc:.3f}", delta=f"Model: {selected_model_name.split()[0]}")
-
+kpi1.metric("Units in stock", f"{len(df):,}", f"{df['lot_id'].nunique()} purchase lots", delta_color="off")
+kpi2.metric("Landed capital", f"MXN {total_capital / 1e6:.2f}M", "4 warehouses", delta_color="off")
+kpi3.metric("Stalled > 120 days", f"MXN {stalled / 1e6:.2f}M", f"{stalled / total_capital:.1%} of capital",
+            delta_color="off")
+kpi4.metric("Active model ROC-AUC", f"{results[active]['cv_auc_mean']:.3f}",
+            f"{active} · 4-fold grouped CV", delta_color="off")
 st.divider()
 
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Data Explorer & EDA", "⚙️ Preprocessing & Correlation",
+                                  "🤖 Multi-Model Benchmark", "🔮 What-If Inference"])
 
-# =============================================================================
-# 5. WORKSHOP TABS: EXPLORATION, PIPELINE, BENCHMARK, & INFERENCE
-# =============================================================================
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📊 Data Explorer & EDA", 
-    "⚙️ Preprocessing & Correlation", 
-    "🤖 Multi-Model Benchmark", 
-    "🔮 Real-Time What-If Inference"
-])
-
-# -----------------------------------------------------------------------------
-# TAB 1: DATA EXPLORER & EDA
-# -----------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Tab 1: Data Explorer
+# ------------------------------------------------------------------------------
 with tab1:
-    st.subheader("Raw Industrial Telemetry Ingestion & Statistical Profile")
-    col_a, col_b = st.columns([2, 1])
-    
-    with col_a:
-        st.dataframe(df_raw.head(100), use_container_width=True, height=320)
-    
-    with col_b:
-        st.write("**Dataset Summary Statistics:**")
-        st.dataframe(df_raw.describe().T[['mean', 'std', 'min', '50%', 'max']], use_container_width=True)
-    
+    st.subheader("Anonymised inventory table")
+    left, right = st.columns([3, 2])
+    left.dataframe(df.head(100), width="stretch", height=330)
+    right.markdown("**Summary statistics**")
+    right.dataframe(df[["page_counter_k", "landed_cost_mxn", AGE, TARGET]].describe().T.round(2),
+                    width="stretch")
+
     st.divider()
-    st.subheader("Interactive Feature Distribution Analysis")
-    selected_feature = st.selectbox("Select Feature to Visualize:", [c for c in df_raw.columns if c != 'system_failure_flag'])
-    
-    fig_hist = px.histogram(
-        df_raw, 
-        x=selected_feature, 
-        color="system_failure_flag", 
-        barmode="overlay",
-        title=f"Distribution of {selected_feature} by System Failure Status",
-        color_discrete_map={0: "#10B981", 1: "#EF4444"}
-    )
-    st.plotly_chart(fig_hist, use_container_width=True)
+    st.subheader("Feature distribution by turnover status")
+    view = df.assign(status=df[TARGET].map(STATUS))
+    choice = st.selectbox("Feature", list(LABELS), format_func=LABELS.get, key="eda_feature")
+    plot_data = view.copy()
+    if choice == AGE:
+        plot_data[AGE] = plot_data[AGE].clip(upper=730)
+        st.caption("Days in stock are capped at 730 for readability; the oldest unit has 2,526.")
+    if pd.api.types.is_numeric_dtype(plot_data[choice]):
+        fig = px.histogram(plot_data, x=choice, color="status", barmode="overlay", nbins=40,
+                           color_discrete_map=STATUS_COLORS, labels={choice: LABELS[choice], "status": ""})
+    else:
+        counts = plot_data.groupby([choice, "status"]).size().reset_index(name="units")
+        fig = px.bar(counts, x=choice, y="units", color="status", barmode="stack",
+                     color_discrete_map=STATUS_COLORS, labels={choice: LABELS[choice], "status": "", "units": "Units"})
+        fig.update_xaxes(categoryorder="total descending")
+    fig.update_yaxes(title="Units")
+    fig.update_layout(legend=dict(orientation="h", y=1.1), margin=dict(t=40))
+    st.plotly_chart(fig, width="stretch", key="eda_hist")
 
+    site = view.groupby(["warehouse", "status"])["landed_cost_mxn"].sum().reset_index()
+    fig_site = px.bar(site, y="warehouse", x="landed_cost_mxn", color="status", orientation="h",
+                      color_discrete_map=STATUS_COLORS, title="Landed capital by warehouse",
+                      labels={"landed_cost_mxn": "Landed capital (MXN)", "warehouse": "", "status": ""})
+    fig_site.update_layout(legend=dict(orientation="h", y=1.15), height=320)
+    st.plotly_chart(fig_site, width="stretch", key="eda_site")
 
-# -----------------------------------------------------------------------------
-# TAB 2: PREPROCESSING & CORRELATION
-# -----------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Tab 2: Preprocessing
+# ------------------------------------------------------------------------------
 with tab2:
-    st.subheader("Feature Correlation & Preprocessing Matrix")
-    num_df = df_raw.select_dtypes(include=[np.number])
-    corr_matrix = num_df.corr()
-    
-    fig_corr = px.imshow(
-        corr_matrix,
-        text_auto=".2f",
-        aspect="auto",
-        title="Pearson Feature Correlation Matrix",
-        color_continuous_scale="Blues"
-    )
-    st.plotly_chart(fig_corr, use_container_width=True)
+    st.subheader("Leak-free feature pipeline")
+    st.caption(f"Imputer, scaler and encoder were fitted on {meta['train_units']} training units only "
+               f"and are served from models/preprocessor.joblib.")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Missing-value treatment**")
+        nulls = df[meta["numeric"]].isna().sum()
+        st.dataframe(pd.DataFrame({
+            "Missing": nulls,
+            "Treatment": ["Median imputation", "Median imputation"],
+            "Train median": [meta["imputed_median_counter"], meta["imputed_median_cost"]],
+        }), width="stretch")
+        st.caption("A page counter of 0 on a used MFP is a missing reading, so it is treated as NaN.")
+    with col2:
+        st.markdown("**StandardScaler parameters** (after log1p)")
+        st.dataframe(pd.DataFrame({"Mean": scaler.mean_, "Std. deviation": scaler.scale_},
+                                  index=meta["numeric"]).round(4), width="stretch")
+        encoded = meta["encoded_columns"]
+        passthrough = len(meta["numeric"]) + len(meta["accessories"])
+        st.markdown(f"**One-hot encoding:** {len(meta['categorical'])} categorical inputs become "
+                    f"{len(encoded) - passthrough} columns; rare levels (< 5 units) are pooled and "
+                    "unseen levels are ignored.")
+        st.markdown(f"**Model matrix:** {len(encoded)} columns from {len(meta['features'])} inputs.")
 
+    st.divider()
+    st.markdown("**Scaling effect**")
+    feature = st.selectbox("Numeric feature", meta["numeric"], format_func=LABELS.get, key="scale_feature")
+    position = meta["numeric"].index(feature)
+    before = df[feature].dropna()
+    after = (np.log1p(before) - scaler.mean_[position]) / scaler.scale_[position]
+    raw_col, scaled_col = st.columns(2)
+    raw_fig = px.histogram(before, nbins=40, title="Raw", labels={"value": LABELS[feature]},
+                           color_discrete_sequence=[BLUE])
+    scaled_fig = px.histogram(after, nbins=40, title="After log1p + StandardScaler",
+                              labels={"value": "Standardised value"}, color_discrete_sequence=[AMBER])
+    for fig in (raw_fig, scaled_fig):
+        fig.update_layout(showlegend=False, height=300, yaxis_title="Units")
+    raw_col.plotly_chart(raw_fig, width="stretch", key="scale_raw")
+    scaled_col.plotly_chart(scaled_fig, width="stretch", key="scale_after")
 
-# -----------------------------------------------------------------------------
-# TAB 3: MULTI-MODEL BENCHMARK
-# -----------------------------------------------------------------------------
+    st.divider()
+    numeric = df.select_dtypes(include=[np.number])
+    fig_corr = px.imshow(numeric.corr(), text_auto=".2f", aspect="auto", zmin=-1, zmax=1,
+                         color_continuous_scale="RdBu_r", title="Pearson correlation matrix")
+    fig_corr.update_layout(height=560)
+    st.plotly_chart(fig_corr, width="stretch", key="corr")
+    st.info("days_in_stock defines the target (slow mover = more than 120 days), so it appears here for "
+            "analysis but is never a model input. Arrival date, exchange rate, reservation status and "
+            "transfer history were removed for the same reason.")
+
+# ------------------------------------------------------------------------------
+# Tab 3: Benchmark
+# ------------------------------------------------------------------------------
 with tab3:
-    st.subheader("Empirical Model Performance Benchmark Suite")
-    st.dataframe(performance_df, use_container_width=True)
-    
-    col_m1, col_m2 = st.columns(2)
-    active_model = fitted_models[selected_model_name]
-    y_prob_test = active_model.predict_proba(X_test)[:, 1] if hasattr(active_model, "predict_proba") else active_model.predict(X_test)
-    y_pred_custom = (y_prob_test >= model_threshold).astype(int)
-    
-    with col_m1:
-        st.subheader(f"Confusion Matrix ({selected_model_name})")
-        cm = confusion_matrix(y_test, y_pred_custom)
-        fig_cm = px.imshow(
-            cm,
-            text_auto=True,
-            x=['Predicted Safe (0)', 'Predicted Failure (1)'],
-            y=['Actual Safe (0)', 'Actual Failure (1)'],
-            color_continuous_scale="Reds",
-            title=f"Threshold = {model_threshold:.2f}"
-        )
-        st.plotly_chart(fig_cm, use_container_width=True)
-        
-    with col_m2:
-        st.subheader("ROC-AUC Curve Comparison")
+    st.subheader("Classical models vs. neural network")
+    st.caption(f"All scores below come from {meta['test_units']} units in {meta['test_lots']} purchase lots "
+               "that no model saw during training or tuning.")
+    table = pd.DataFrame([{
+        "Model": ("★ " if name == meta["champion"] else "") + name,
+        "Family": FAMILY[name],
+        "Accuracy": results[name]["accuracy"], "Precision": results[name]["precision"],
+        "Recall": results[name]["recall"], "F1": results[name]["f1"], "ROC-AUC": results[name]["roc_auc"],
+        "CV ROC-AUC": f"{results[name]['cv_auc_mean']:.3f} ± {results[name]['cv_auc_std']:.3f}",
+        "R²": results[name]["r2"], "Silhouette": results[name]["silhouette"],
+    } for name in model_names])
+    st.dataframe(table.round(3), width="stretch", hide_index=True)
+    st.caption("★ champion = best 4-fold grouped CV ROC-AUC. R²: log days in stock for MLR, probability vs. "
+               "label for the classifiers. Silhouette: separation of the predicted groups in the model matrix.")
+
+    champion_row = results[meta["champion"]]
+    st.markdown(f"**Milestone 1 targets for the champion:** recall ≥ 0.75 → "
+                f"{'✅' if champion_row['recall'] >= 0.75 else '❌'} {champion_row['recall']:.2f} · "
+                f"F1 ≥ 0.70 → {'✅' if champion_row['f1'] >= 0.70 else '❌'} {champion_row['f1']:.2f}")
+
+    st.divider()
+    st.subheader("Confusion matrices at each model's policy cut-off")
+    for column, name in zip(st.columns(4), model_names):
+        fig_cm = px.imshow(results[name]["confusion"], text_auto=True, color_continuous_scale="Blues",
+                           x=["Pred. healthy", "Pred. slow"], y=["Healthy", "Slow"], title=name)
+        fig_cm.update_layout(coloraxis_showscale=False, height=300, margin=dict(l=10, r=10, t=50, b=10))
+        column.plotly_chart(fig_cm, width="stretch", key=f"cm_{name}")
+
+    st.divider()
+    roc_col, loss_col = st.columns(2)
+    with roc_col:
         fig_roc = go.Figure()
-        for name, m in fitted_models.items():
-            prob = m.predict_proba(X_test)[:, 1] if hasattr(m, "predict_proba") else m.predict(X_test)
-            fpr, tpr, _ = roc_curve(y_test, prob)
-            auc_val = roc_auc_score(y_test, prob)
-            fig_roc.add_trace(go.Scatter(x=fpr, y=tpr, mode='lines', name=f"{name} (AUC={auc_val:.2f})"))
-            
-        fig_roc.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode='lines', line=dict(dash='dash', color='gray'), name='Random Chance'))
-        fig_roc.update_layout(xaxis_title="False Positive Rate", yaxis_title="True Positive Rate", title="ROC Curves across Algorithms")
-        st.plotly_chart(fig_roc, use_container_width=True)
+        for name in model_names:
+            fig_roc.add_trace(go.Scatter(x=results[name]["fpr"], y=results[name]["tpr"], mode="lines",
+                                         line=dict(color=MODEL_COLORS[name], width=2.5),
+                                         name=f"{name} (AUC {results[name]['roc_auc']:.3f})"))
+        fig_roc.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode="lines", name="Random chance",
+                                     line=dict(color="gray", dash="dash")))
+        fig_roc.update_layout(title="ROC curves on hold-out lots", xaxis_title="False positive rate",
+                              yaxis_title="True positive rate", height=430,
+                              legend=dict(orientation="h", y=-0.22))
+        st.plotly_chart(fig_roc, width="stretch", key="roc")
+    with loss_col:
+        curves = meta["ann_curves"]
+        epochs = list(range(1, len(curves["train_loss"]) + 1))
+        fig_loss = go.Figure()
+        fig_loss.add_trace(go.Scatter(x=epochs, y=curves["train_loss"], name="Training loss",
+                                      line=dict(color=BLUE, width=2.5)))
+        fig_loss.add_trace(go.Scatter(x=epochs, y=curves["val_loss"], name="Validation loss (held-out lots)",
+                                      line=dict(color=AMBER, width=2.5)))
+        fig_loss.add_vline(x=curves["best_epoch"], line_dash="dash", line_color=GREEN,
+                           annotation_text=f"Weights restored: epoch {curves['best_epoch']}")
+        fig_loss.update_layout(title="ANN loss convergence", xaxis_title="Epoch", yaxis_title="Log loss",
+                               height=430, legend=dict(orientation="h", y=-0.22))
+        st.plotly_chart(fig_loss, width="stretch", key="loss")
+        best = curves["best_epoch"] - 1
+        st.caption(f"Validation loss bottoms at {curves['val_loss'][best]:.3f} in epoch {curves['best_epoch']} and "
+                   f"ends at {curves['val_loss'][-1]:.3f}, while training loss reaches "
+                   f"{curves['train_loss'][-1]:.3f}. Training stops once held-out loss stops improving, "
+                   "and the best-epoch weights are the ones serialized.")
 
-
-# -----------------------------------------------------------------------------
-# TAB 4: REAL-TIME WHAT-IF SCENARIO INFERENCE
-# -----------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Tab 4: What-If
+# ------------------------------------------------------------------------------
 with tab4:
-    st.subheader("🔮 Real-Time What-If Scenario Prediction Engine")
-    st.write("Adjust industrial telemetry sliders to test real-time risk predictions:")
-    
-    col_i1, col_i2 = st.columns([1, 1])
-    
-    with col_i1:
-        st.write("### 🎛️ Telemetry Input Parameters")
-        input_temp = st.slider("Operating Temperature (°C):", 30.0, 110.0, 65.0)
-        input_vib = st.slider("Vibration Amplitude (mm):", 0.1, 8.0, 1.5)
-        input_pwr = st.slider("Power Consumption (kW):", 10.0, 60.0, 35.0)
-        input_press = st.slider("Pressure (PSI):", 20.0, 150.0, 75.0)
-        input_hrs = st.slider("Operating Hours:", 50, 6000, 1500)
-        
-    with col_i2:
-        st.write("### 🎯 Live Model Inference Output")
-        input_df = pd.DataFrame([{
-            'operating_temperature_c': input_temp,
-            'vibration_amplitude_mm': input_vib,
-            'power_consumption_kw': input_pwr,
-            'pressure_psi': input_press,
-            'operating_hours': input_hrs
-        }])
-        
-        simulated_prob = active_model.predict_proba(input_df)[0, 1]
-        predicted_class = 1 if simulated_prob >= model_threshold else 0
-        
-        st.markdown(f"#### Predicted Failure Probability: **{simulated_prob*100:.1f}%**")
-        st.progress(float(simulated_prob))
-        
-        if predicted_class == 1:
-            st.error(f"⚠️ CRITICAL ALERT: System Failure Risk Detected! (Cutoff = {model_threshold:.2f})")
-            st.write("<b>Recommended Client Operational Policy:</b> Trigger immediate preventative maintenance lockout and dispatch field engineers.")
+    st.subheader("Real-time what-if scenario engine")
+    b1, b2, b3, _ = st.columns([1.3, 1.3, 1, 3])
+    b1.button("Load real low-risk unit", on_click=load_preset, args=("low",), width="stretch")
+    b2.button("Load real high-risk unit", on_click=load_preset, args=("high",), width="stretch")
+    b3.button("Reset", on_click=reset_scenario, width="stretch")
+
+    inputs, output = st.columns(2)
+    with inputs:
+        st.markdown("##### Unit profile")
+        st.slider("Days in stock (inventory age)", 0, 730, key="wi_days")
+        st.slider("Landed cost (MXN)", 500, 45000, step=100, key="wi_cost")
+        st.slider("Page counter (thousands)", 1, 1700, step=5, key="wi_counter")
+        c1, c2 = st.columns(2)
+        c1.selectbox("Brand", sorted(df["brand"].unique()), key="wi_brand")
+        c2.selectbox("Warehouse", sorted(df["warehouse"].unique()), key="wi_warehouse")
+        c1.selectbox("Product line", sorted(df["line"].unique()), key="wi_line")
+        c2.selectbox("Appearance", sorted(df["appearance"].unique()), key="wi_appearance")
+        c1.selectbox("Copy quality", sorted(df["copy_quality"].unique()), key="wi_quality")
+        c2.selectbox("Working unit", sorted(df["working"].unique()), key="wi_working")
+        st.multiselect("Accessories", meta["accessories"], key="wi_acc",
+                       format_func=lambda c: c.replace("acc_", "").upper())
+
+    row = pd.DataFrame([{
+        "brand": st.session_state.wi_brand, "line": st.session_state.wi_line,
+        "warehouse": st.session_state.wi_warehouse, "appearance": st.session_state.wi_appearance,
+        "copy_quality": st.session_state.wi_quality, "working": st.session_state.wi_working,
+        "page_counter_k": float(st.session_state.wi_counter),
+        "landed_cost_mxn": float(st.session_state.wi_cost),
+        **{c: int(c in st.session_state.wi_acc) for c in meta["accessories"]},
+    }])[meta["features"]]
+
+    with output:
+        st.markdown(f"##### Live inference · {active}")
+        score = raw_score(active, row)
+        band = risk_band(active, score)
+        if rule["kind"] == "regression":
+            days_pred = float(np.expm1(score))
+            st.metric("Predicted days in stock", f"{days_pred:.0f} days")
+            st.progress(min(days_pred / 365, 1.0))
+            shown = f"{days_pred:.0f} days"
         else:
-            st.success(f"✅ NORMAL OPERATION: Safe Telemetry State (Cutoff = {model_threshold:.2f})")
-            st.write("<b>Recommended Client Operational Policy:</b> Continue standard telemetry monitoring schedule.")
-            
+            st.metric("Stall probability", f"{score:.1%}")
+            st.progress(score)
+            shown = f"{score:.1%}"
+        st.markdown(f"**Risk band: {band}**")
+
+        days = st.session_state.wi_days
+        cost = st.session_state.wi_cost
+        recovered = cost * (1 - DISCOUNT)
+        if days >= SLOW_DAYS:
+            action = "25% discount rule"
+            st.error(f"🚨 25% DISCOUNT RULE TRIGGERED: unit is at {days} days, past the {SLOW_DAYS}-day limit.")
+            st.markdown(f"**Commercial Director:** launch the 25% discount now. On landed cost that means selling "
+                        f"at MXN {recovered:,.0f} to release the cash (MXN {cost - recovered:,.0f} concession).")
+        elif band == "HIGH":
+            action = "Priority list"
+            st.warning(f"⚠️ HIGH RISK: {SLOW_DAYS - days} days left before the discount rule.")
+            st.markdown("**Procurement:** reopen the price or skip this configuration at the buy. "
+                        "**Commercial:** add it to Monday's priority list and avoid sending it to MEX.")
+        elif band == "WATCH":
+            action = "Watch list"
+            st.info(f"👀 WATCH: {SLOW_DAYS - days} days left before the discount rule.")
+            st.markdown("**Inventory:** assign it to the lowest-risk warehouse and review the price at day 60.")
+        else:
+            action = "Normal flow"
+            st.success(f"✅ NORMAL FLOW: low stall risk, {SLOW_DAYS - days} days left before the discount rule.")
+            st.markdown("**Procurement:** no manual action needed.")
+        st.caption("Inventory age drives the 25% business rule only. It is not a model input: "
+                   "the label is defined from it, so feeding it to the model would leak the answer.")
+
+        if st.button("Save this scenario", width="stretch"):
+            st.session_state.history.append({
+                "Model": active, "Brand": row.at[0, "brand"], "Warehouse": row.at[0, "warehouse"],
+                "Days": days, "Cost (MXN)": cost, "Result": shown, "Band": band, "Action": action,
+            })
+
+    if st.session_state.history:
         st.divider()
-        st.write("**Scenario Features Transmitted:**")
-        st.json(input_df.to_dict(orient='records')[0])
+        st.markdown("**Scenarios saved in this session**")
+        st.dataframe(pd.DataFrame(st.session_state.history), width="stretch", hide_index=True)
+        if st.button("Clear scenarios"):
+            st.session_state.history = []
+            st.rerun()
