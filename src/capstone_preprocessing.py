@@ -39,7 +39,7 @@ ACCESSORY_TOKENS = ["DUPLEX", "DSDF", "FAX", "RADF", "FINISHER", "U-SEND"]
 
 # Columns removed on purpose, with the reason printed in the execution log.
 LEAKAGE_COLUMNS = {
-    "DIAS EN INVENTARIO": "target source (kept only to build the label)",
+    "DIAS EN INVENTARIO": "target source (label and what-if policy only, never a model input)",
     "RANGO": "age bucket = the target in disguise",
     "FECHA LLEGADA": "arrival date fully determines days in stock",
     "T.C.": "exchange rate at purchase acts as a date proxy",
@@ -108,11 +108,12 @@ def main():
           "(anonymised, used for grouped validation)")
 
     df["slow_mover"] = (df["DIAS EN INVENTARIO"] > SLOW_MOVER_DAYS).astype(int)
+    df["days_in_stock"] = df["DIAS EN INVENTARIO"].astype(int)
     df = df.rename(columns=RENAME)
 
     columns = (["lot_id"] + list(RENAME.values())
                + [c for c in df.columns if c.startswith("acc_")]
-               + ["slow_mover"])
+               + ["days_in_stock", "slow_mover"])
     out = df[columns]
 
     section("5. OUTPUT")
