@@ -175,7 +175,7 @@ with tab1:
     plot_data = view.copy()
     if choice == AGE:
         plot_data[AGE] = plot_data[AGE].clip(upper=730)
-        st.caption("Days in stock are capped at 730 for readability; the oldest unit has 2,526.")
+        st.caption(f"Days in stock are capped at 730 for readability; the oldest unit has {df[AGE].max():,}.")
     if pd.api.types.is_numeric_dtype(plot_data[choice]):
         fig = px.histogram(plot_data, x=choice, color="status", barmode="overlay", nbins=40,
                            color_discrete_map=STATUS_COLORS, labels={choice: LABELS[choice], "status": ""})

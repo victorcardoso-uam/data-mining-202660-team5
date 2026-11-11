@@ -6,8 +6,12 @@ Turns the confidential Big99 inventory export into a clean, anonymised
 modelling table. Every column that is only known AFTER a unit has aged in the
 warehouse is dropped here, so no downstream model can see the answer.
 
-    data/raw/inventario_mfp_usado.csv        (confidential, git-ignored)
-        -> data/processed/big99_model_input.csv   (anonymised, committed)
+    data/raw/inventario_mfp_usado_2026-10-20.xlsx   (confidential, git-ignored)
+        -> data/processed/big99_model_input.csv     (anonymised, committed)
+
+The 20 Oct 2026 snapshot comes pre-cleaned by Big99: units in non-saleable
+warehouses (in-transit imports, parts, write-offs) sit in a separate
+EXCLUIDOS sheet, so only the INVENTARIO LIMPIO sheet is read here.
 
 From the project root:
     python src/capstone_preprocessing.py
@@ -18,7 +22,8 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
-RAW_PATH = ROOT / "data" / "raw" / "inventario_mfp_usado.csv"
+RAW_PATH = ROOT / "data" / "raw" / "inventario_mfp_usado_2026-10-20.xlsx"
+RAW_SHEET = "INVENTARIO LIMPIO"
 OUT_PATH = ROOT / "data" / "processed" / "big99_model_input.csv"
 
 SLOW_MOVER_DAYS = 120
@@ -27,7 +32,7 @@ SLOW_MOVER_DAYS = 120
 RENAME = {
     "MARCA": "brand",
     "LINEA": "line",
-    "UBICACION": "warehouse",
+    "PLAZA": "warehouse",
     "APARIENCIA GRAL.": "appearance",
     "CALIDAD COPIA": "copy_quality",
     "EQUIPO FUNCIONANDO": "working",
@@ -40,7 +45,9 @@ ACCESSORY_TOKENS = ["DUPLEX", "DSDF", "FAX", "RADF", "FINISHER", "U-SEND"]
 # Columns removed on purpose, with the reason printed in the execution log.
 LEAKAGE_COLUMNS = {
     "DIAS EN INVENTARIO": "target source (label and what-if policy only, never a model input)",
-    "RANGO": "age bucket = the target in disguise",
+    "RANGO SEMAFORO": "age bucket = the target in disguise",
+    "COLOR SEMAFORO": "traffic-light colour of the age bucket",
+    "ALMACEN": "physical store; 'EN TRANS' marks units that just arrived",
     "FECHA LLEGADA": "arrival date fully determines days in stock",
     "T.C.": "exchange rate at purchase acts as a date proxy",
     "APARTADO": "reservation happens after the unit starts ageing",
@@ -64,8 +71,12 @@ def main():
     print("=" * 78)
     print("BIG99 CAPSTONE — PREPROCESSING & LEAKAGE AUDIT")
     print("=" * 78)
-    raw = pd.read_csv(RAW_PATH, encoding="utf-8-sig")
-    print(f"Raw export: {raw.shape[0]} rows x {raw.shape[1]} columns")
+    raw = pd.read_excel(RAW_PATH, sheet_name=RAW_SHEET)
+    print(f"Raw export ({RAW_SHEET}): {raw.shape[0]} rows x {raw.shape[1]} columns")
+    # The export pads text cells with non-breaking spaces ('BUENO\xa0', '166\xa0').
+    text = raw.select_dtypes(include=["object", "string"]).columns
+    raw[text] = raw[text].apply(lambda s: s.str.replace("\xa0", " ", regex=False).str.strip())
+    print(f"Stripped non-breaking spaces from {len(text)} text columns")
 
     section("1. INVALID RECORDS")
     invalid = (raw["COST W/FREIGHT"] <= 0) | (raw["DIAS EN INVENTARIO"] <= 0)
@@ -101,7 +112,7 @@ def main():
 
     # Units of one purchase lot share arrival date and therefore label.
     # An anonymous lot id lets the model split by lot instead of by row.
-    lot_key = df["PEDIMENTO"].fillna(df["FECHA LLEGADA"]).astype(str)
+    lot_key = df["PEDIMENTO"].astype("string").fillna(df["FECHA LLEGADA"].astype(str))
     df["lot_id"] = "LOT_" + pd.Series(
         pd.factorize(lot_key)[0] + 1, index=df.index).astype(str).str.zfill(3)
     print(f"Purchase lots identified: {df['lot_id'].nunique()} "

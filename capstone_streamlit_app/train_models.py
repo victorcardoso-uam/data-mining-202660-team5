@@ -208,7 +208,7 @@ def main():
     print(f"ANN: stopped at epoch {len(curves['train_loss'])}, best {curves['best_epoch']}, "
           f"threshold {threshold:.2f}")
 
-    # One hold-out of 24 lots is noisy, so the champion is chosen on 4-fold grouped CV.
+    # One hold-out of about 25 lots is noisy, so the champion is chosen on 4-fold grouped CV.
     cv_auc = {name: [] for name in results}
     for fit, hold in outer.split(X, y, groups):
         fold_prep = build_preprocessor(accessories).fit(X.iloc[fit])
@@ -234,12 +234,16 @@ def main():
     for name, file in files.items():
         joblib.dump(fitted[name], MODELS / file, compress=3)
 
-    # Real hold-out units used as one-click what-if presets.
-    rf_scores = fitted["Random Forest"].predict_proba(Z_te)[:, 1]
+    # Real hold-out units, ranked by the champion, used as one-click what-if presets.
+    champ_scores = (fitted[champion].predict(Z_te) if policy[champion]["kind"] == "regression"
+                    else fitted[champion].predict_proba(Z_te)[:, 1])
     columns = features + [AGE]
     test_rows = df.iloc[test_idx][columns].reset_index(drop=True)
-    presets = {"low": test_rows.iloc[int(np.argmin(rf_scores))].to_dict(),
-               "high": test_rows.iloc[int(np.argmax(rf_scores))].to_dict()}
+    # Only complete records (counter read, product line known) make readable demo examples.
+    complete = (test_rows["page_counter_k"].notna() & (test_rows["line"] != "SIN LINEA")).to_numpy()
+    ranked = np.where(complete, champ_scores, np.nan)
+    presets = {"low": test_rows.iloc[int(np.nanargmin(ranked))].to_dict(),
+               "high": test_rows.iloc[int(np.nanargmax(ranked))].to_dict()}
 
     meta = {
         "files": files, "features": features, "categorical": CATEGORICAL, "numeric": NUMERIC,

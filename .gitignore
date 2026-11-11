@@ -2,5 +2,5 @@
 __pycache__/
 .venv/
 .vscode/
-# Confidential Big99 export: never commit the raw file (client names, invoices, customs IDs)
-data/raw/inventario_mfp_usado.csv
+# Confidential Big99 exports: never commit raw files (client names, invoices, customs IDs)
+data/raw/
