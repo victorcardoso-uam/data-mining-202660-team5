@@ -24,6 +24,8 @@ import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 
 import assistant
+from app_guide import (ASSISTANT_PLACES, FAMILY, LABELS, SIDE_RATIOS, SLIDERS, STATUS, TAB_NAMES, TABLE_ROWS,
+                       default_scenario, preset_values)
 
 APP = Path(__file__).resolve().parent
 MODELS = APP / "models"
@@ -32,18 +34,15 @@ AGE = "days_in_stock"
 SLOW_DAYS = 120
 DISCOUNT = 0.25
 GREEN, RED, AMBER, BLUE, VIOLET = "#10B981", "#EF4444", "#E08A3C", "#8FA3D9", "#C084FC"
-STATUS = {0: "Healthy turnover", 1: "Slow mover (> 120 days)"}
 STATUS_COLORS = {STATUS[0]: GREEN, STATUS[1]: RED}
 MODEL_COLORS = {"Random Forest": AMBER, "Decision Tree": BLUE, "MLR": GREEN, "ANN": VIOLET}
-FAMILY = {"Random Forest": "Classical ensemble", "Decision Tree": "Classical tree",
-          "MLR": "Classical regression", "ANN": "Neural network"}
-LABELS = {"page_counter_k": "Page counter (thousands)", "landed_cost_mxn": "Landed cost (MXN)",
-          AGE: "Days in stock", "brand": "Brand", "line": "Product line",
-          "warehouse": "Warehouse", "appearance": "Appearance", "copy_quality": "Copy quality"}
-ASSISTANT_PLACES = ("Side panel", "Below the tabs", "Hidden")
 
 st.set_page_config(page_title="Big99 Inventory Intelligence", page_icon="📦", layout="wide",
                    initial_sidebar_state="expanded")
+# Slimmer page margins and chat bubbles: on a laptop screen the default ones take the width the assistant needs.
+st.markdown("<style>[data-testid='stMainBlockContainer'] {padding-left: 1.5rem; padding-right: 1.5rem;} "
+            "[data-testid='stChatMessage'] {padding: 0.5rem 0.25rem 0.5rem 0.5rem; gap: 0.5rem;}</style>",
+            unsafe_allow_html=True)
 
 
 @st.cache_data
@@ -67,7 +66,8 @@ def load_artifacts(files):
 def load_fact_sheet():
     """Everything the assistant may quote about the data and the models, built once per server."""
     explain = json.loads((MODELS / "explainability.json").read_text())
-    return assistant.build_fact_sheet(load_data(), load_metrics(), explain)
+    meta = load_metrics()
+    return assistant.build_fact_sheet(load_data(), meta, explain, load_artifacts(meta["files"])[1])
 
 
 def setting(name, default=None):
@@ -106,18 +106,7 @@ model_names = sorted(results, key=lambda n: -results[n]["cv_auc_mean"])
 # ------------------------------------------------------------------------------
 # Session state: what-if inputs survive tab switches and script reruns
 # ------------------------------------------------------------------------------
-DEFAULTS = {
-    "wi_days": 60,
-    "wi_cost": int(round(df["landed_cost_mxn"].median(), -2)),
-    "wi_counter": int(df["page_counter_k"].median()),
-    "wi_brand": df["brand"].mode()[0],
-    "wi_line": df["line"].mode()[0],
-    "wi_warehouse": df["warehouse"].mode()[0],
-    "wi_appearance": df["appearance"].mode()[0],
-    "wi_quality": df["copy_quality"].mode()[0],
-    "wi_working": "SI",
-    "wi_acc": ["acc_duplex", "acc_dsdf"],
-}
+DEFAULTS = default_scenario(df)
 for key, value in DEFAULTS.items():
     st.session_state.setdefault(key, value)
 st.session_state.setdefault("history", [])
@@ -132,16 +121,7 @@ def reset_scenario():
 
 
 def load_preset(which):
-    row = meta["presets"][which]
-    counter = row["page_counter_k"]
-    st.session_state.update({
-        "wi_days": int(min(row[AGE], 730)),
-        "wi_cost": int(min(round(row["landed_cost_mxn"], -2), 45000)),
-        "wi_counter": DEFAULTS["wi_counter"] if pd.isna(counter) else int(min(counter, 1700)),
-        "wi_brand": row["brand"], "wi_line": row["line"], "wi_warehouse": row["warehouse"],
-        "wi_appearance": row["appearance"], "wi_quality": row["copy_quality"], "wi_working": row["working"],
-        "wi_acc": [c for c in meta["accessories"] if row[c] == 1],
-    })
+    st.session_state.update(preset_values(meta["presets"][which], DEFAULTS, meta["accessories"]))
 
 
 # ------------------------------------------------------------------------------
@@ -161,8 +141,8 @@ else:
                        "Cut-offs were tuned on out-of-fold training lots.")
 st.sidebar.divider()
 st.sidebar.radio("AI assistant", ASSISTANT_PLACES, key="assistant_place",
-                 help="Side panel keeps the chat next to the sliders on a wide screen. "
-                      "On a small screen, 'Below the tabs' leaves the tabs their full width.")
+                 help="The side panel keeps the chat next to the tabs; the wide one gives it half the page. "
+                      "On a small screen, 'Below the tabs' gives both the full width.")
 st.sidebar.divider()
 st.sidebar.markdown("**Serialized artifacts loaded**")
 st.sidebar.code("\n".join(["preprocessor.joblib", "standard_scaler.joblib", *meta["files"].values()]), language=None)
@@ -190,15 +170,14 @@ st.divider()
 # The assistant sits beside the tabs so it stays in view while the sliders move;
 # on a narrow screen it can go below them instead.
 place = st.session_state["assistant_place"]
-if place == "Side panel":
-    tabs_area, assistant_area = st.columns([7, 3], gap="medium")
+if place in SIDE_RATIOS:
+    tabs_area, assistant_area = st.columns(list(SIDE_RATIOS[place]), gap="medium")
 elif place == "Below the tabs":
     tabs_area, assistant_area = st.container(), st.container()
 else:
     tabs_area, assistant_area = st.container(), None
 
-tab1, tab2, tab3, tab4 = tabs_area.tabs(["📊 Data Explorer & EDA", "⚙️ Preprocessing & Correlation",
-                                         "🤖 Multi-Model Benchmark", "🔮 What-If Inference"])
+tab1, tab2, tab3, tab4 = tabs_area.tabs(list(TAB_NAMES))
 
 # ------------------------------------------------------------------------------
 # Tab 1: Data Explorer
@@ -206,7 +185,7 @@ tab1, tab2, tab3, tab4 = tabs_area.tabs(["📊 Data Explorer & EDA", "⚙️ Pre
 with tab1:
     st.subheader("Anonymised inventory table")
     left, right = st.columns([3, 2])
-    left.dataframe(df.head(100), width="stretch", height=330)
+    left.dataframe(df.head(TABLE_ROWS), width="stretch", height=330)
     right.markdown("**Summary statistics**")
     right.dataframe(df[["page_counter_k", "landed_cost_mxn", AGE, TARGET]].describe().T.round(2),
                     width="stretch")
@@ -370,9 +349,8 @@ with tab4:
     inputs, output = st.columns(2)
     with inputs:
         st.markdown("##### Unit profile")
-        st.slider("Days in stock (inventory age)", 0, 730, key="wi_days")
-        st.slider("Landed cost (MXN)", 500, 45000, step=100, key="wi_cost")
-        st.slider("Page counter (thousands)", 1, 1700, step=5, key="wi_counter")
+        for key, (label, low, high, step) in SLIDERS.items():
+            st.slider(label, low, high, step=step, key=key)
         c1, c2 = st.columns(2)
         c1.selectbox("Brand", sorted(df["brand"].unique()), key="wi_brand")
         c2.selectbox("Warehouse", sorted(df["warehouse"].unique()), key="wi_warehouse")
@@ -479,7 +457,7 @@ def render_assistant():
                 "`.streamlit/secrets.toml` (see `secrets.toml.example`) or set it as an environment "
                 "variable, then restart the app.")
         return
-    st.caption(f"Answers only from this dashboard's data, benchmark and live what-if scenario · {model_id}")
+    st.caption(f"Answers about this dashboard only: its data, models, screens and the live what-if scenario · {model_id}")
 
     log = st.container(height=440, border=True)
     for turn in st.session_state["assistant_chat"]:
@@ -497,8 +475,10 @@ def render_assistant():
 
     if question:
         log.chat_message("user").write(question)
+        scenario = current_scenario()
+        scenario.update(saved=st.session_state.history, placement=place, assistant_model=model_id)
         messages = assistant.build_messages(st.session_state["assistant_chat"], question,
-                                            assistant.scenario_facts(current_scenario()))
+                                            assistant.scenario_facts(scenario))
         try:
             with log.chat_message("assistant"):
                 answer = st.write_stream(assistant.stream_answer(api_key, model_id, load_fact_sheet(), messages))
