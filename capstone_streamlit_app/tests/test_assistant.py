@@ -12,12 +12,14 @@ from pathlib import Path
 
 import anthropic
 import httpx2
+import joblib
 import pandas as pd
 import pytest
 from streamlit.testing.v1 import AppTest
 
 APP = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(APP))
+import app_guide  # noqa: E402
 import assistant  # noqa: E402
 
 REQUEST = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
@@ -39,8 +41,13 @@ def explain():
 
 
 @pytest.fixture(scope="module")
-def sheet(df, meta, explain):
-    return assistant.build_fact_sheet(df, meta, explain)
+def scaler():
+    return joblib.load(APP / "models" / "standard_scaler.joblib")
+
+
+@pytest.fixture(scope="module")
+def sheet(df, meta, explain, scaler):
+    return assistant.build_fact_sheet(df, meta, explain, scaler)
 
 
 # ------------------------------------------------------------------------------
@@ -201,3 +208,84 @@ def test_panel_can_move_below_the_tabs_or_hide(monkeypatch):
     at.radio(key="assistant_place").set_value("Hidden").run()
     assert not at.exception and not at.chat_input and len(at.tabs) == 4
     assert len(at.session_state["assistant_chat"]) == 1          # the conversation survives hiding
+
+
+# ------------------------------------------------------------------------------
+# The assistant must cover everything the app shows and how it is used
+# ------------------------------------------------------------------------------
+def save_button(at):
+    return next(button for button in at.button if button.label == "Save this scenario")
+
+
+def test_guide_names_every_control_the_app_draws(sheet, monkeypatch):
+    monkeypatch.setattr(assistant, "stream_answer", lambda *args: iter(["ok"]))
+    at = run_app(key="test-key")
+    at.button(key="suggest_Dataset").click().run()               # "Clear conversation" appears
+    save_button(at).click().run()                                # the saved table and "Clear scenarios" appear
+    assert not at.exception
+    labels = [w.label for kind in (at.button, at.selectbox, at.slider, at.radio, at.multiselect, at.metric)
+              for w in kind]
+    labels += [tab.label.split(" ", 1)[1] for tab in at.tabs] + [heading.value for heading in at.subheader]
+    assert {"Clear conversation", "Clear scenarios", "Active model", "Accessories"} <= set(labels)
+    missing = sorted({label for label in labels if label not in sheet})
+    assert not missing, f"the APP GUIDE does not mention: {missing}"
+    for key, (label, low, high, step) in app_guide.SLIDERS.items():
+        slider = at.slider(key=key)
+        assert (slider.label, slider.min, slider.max, slider.step) == (label, low, high, step)
+        assert f"\"{label}\" from {low:,} to {high:,}" in sheet
+    assert list(at.radio(key="assistant_place").options) == list(app_guide.ASSISTANT_PLACES)
+    assert all(f"\"{place}\"" in sheet for place in app_guide.ASSISTANT_PLACES)
+
+
+def test_on_screen_numbers_match_the_data(df, meta, scaler, sheet):
+    for total in df.groupby("warehouse")["landed_cost_mxn"].sum():           # Tab 1, capital by warehouse
+        assert f"/ {total:,.0f}" in sheet
+    assert f"/ {df['landed_cost_mxn'].std():,.2f} /" in sheet                 # Tab 1, summary statistics
+    for mean, scale in zip(scaler.mean_, scaler.scale_):                     # Tab 2, scaler table
+        assert f"{mean:.4f} / {scale:.4f}" in sheet
+    pair = df[["page_counter_k", "landed_cost_mxn"]].corr().iloc[0, 1]       # Tab 2, full correlation matrix
+    assert f"page_counter_k with landed_cost_mxn {pair:+.2f}" in sheet
+    for file in ["preprocessor.joblib", "standard_scaler.joblib", *meta["files"].values()]:    # sidebar
+        assert file in sheet
+    high = meta["presets"]["high"]                                           # Tab 4, the real units behind the buttons
+    assert f"\"Load real high-risk unit\" loads: {high['brand']}, line {high['line']}, warehouse {high['warehouse']}" in sheet
+
+
+def test_table_rows_are_the_ones_tab_1_lists(df):
+    lines = app_guide.table_rows(df).split("\n")
+    assert f"first {app_guide.TABLE_ROWS} of the {len(df):,} rows" in lines[0]
+    assert len(lines) == 2 + app_guide.TABLE_ROWS                            # caption, CSV header, rows
+    first, last = df.iloc[0], df.iloc[app_guide.TABLE_ROWS - 1]
+    assert lines[2].startswith(f"0,{first['lot_id']},{first['brand']},{first['line']},{first['warehouse']}")
+    assert lines[-1].startswith(f"{app_guide.TABLE_ROWS - 1},{last['lot_id']},{last['brand']}")
+
+
+def test_saved_scenarios_and_panel_placement_reach_the_llm(monkeypatch):
+    sent = {}
+
+    def fake_stream(api_key, model, fact_sheet, messages):
+        sent.update(fact_sheet=fact_sheet, messages=messages)
+        yield "ok"
+
+    monkeypatch.setattr(assistant, "stream_answer", fake_stream)
+    at = run_app(key="test-key")
+    at.button(key="suggest_Dataset").click().run()
+    first = sent["messages"][-1]["content"]
+    assert "nothing has been saved yet" in first and "Assistant panel placement: Side panel." in first
+    assert "APP GUIDE" in sent["fact_sheet"] and "StandardScaler parameters" in sent["fact_sheet"]
+    assert "TABLE ROWS" in sent["fact_sheet"]
+
+    at.selectbox(key="wi_brand").set_value("XEROX").run()
+    save_button(at).click().run()
+    at.radio(key="assistant_place").set_value("Wide side panel").run()
+    at.button(key="suggest_This scenario").click().run()
+    assert not at.exception and at.chat_input and len(at.tabs) == 4
+    last = sent["messages"][-1]["content"]
+    assert "- 1. Model MLR, Brand XEROX" in last and "Assistant panel placement: Wide side panel." in last
+
+
+def test_rules_keep_the_scope_and_guard_the_table_rows():
+    rules = " ".join(assistant.SYSTEM_RULES.replace("\\\n", "").split())
+    assert "Decline requests unrelated to this dashboard without answering them" in rules
+    assert "never count, total or rank the whole stock from it" in rules
+    assert "never send the user to the developers" in rules
