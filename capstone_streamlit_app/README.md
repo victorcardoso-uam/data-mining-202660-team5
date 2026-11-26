@@ -35,7 +35,9 @@ The assistant answers questions in English or Spanish about the data, the models
 
 Git ignores secrets.toml. Do not commit a key or share it in a chat.
 
-Without a key the four tabs still work and the assistant panel shows a setup message. The "AI assistant" option in the sidebar places the panel beside the tabs, below them, or hides it. Below the tabs works better on a small screen.
+Without a key the four tabs still work and the assistant panel shows a setup message. The "AI assistant" option in the sidebar places the panel beside the tabs (side panel, or wide side panel for half the page), below them, or hides it. Below the tabs works better on a small screen.
+
+The assistant answers only about this project: the data, the models, the live what-if unit, and what each screen shows and how to use it.
 
 ## Files
 
@@ -43,11 +45,12 @@ Without a key the four tabs still work and the assistant panel shows a setup mes
 |---|---|
 | app.py | The dashboard |
 | assistant.py | Builds the fact sheet that is sent to the LLM and makes the API call |
+| app_guide.py | Describes every screen, control, on-screen number and listed table row for the fact sheet. app.py takes its tab names, slider ranges and panel options from here |
 | train_models.py | Retrains the four models and rewrites models/ |
 | explain_models.py | Computes feature importance and writes models/explainability.json. Run it after retraining |
 | data/team_dataset.csv | The dataset. The columns are described in docs/data_dictionary.md |
 | models/ | The serialized preprocessor, scaler and four models (.joblib), plus metrics.json |
-| tests/test_assistant.py | 13 checks that run without a key |
+| tests/test_assistant.py | 18 checks that run without a key |
 
 ## Tests
 
@@ -56,4 +59,4 @@ pip install pytest
 python -m pytest tests -q
 ```
 
-The last line should read "13 passed".
+The last line should read "18 passed".
